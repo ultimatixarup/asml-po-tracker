@@ -1,8 +1,11 @@
-# Hello World WhatsApp Agent
+# Construction Manager Agent
 
-An Express webhook service that makes a WhatsApp Business number the chat handle
-for a Claude agent. Meta delivers inbound messages to `POST /webhook`, the agent
-answers with Claude, and the reply goes back out through the Graph API.
+A Claude agent for US general contractors, reachable over WhatsApp and
+Telegram. Field crews send photos, receipts, plans, and notes; the agent files
+everything on an append-only hash-chained ledger, imports estimates from
+spreadsheets, and reconciles change requests into draft change orders that
+price only the delta -- with every line citing its evidence. A read-only
+`/audit` view renders the ledger for dispute resolution.
 
 ## Commands
 
@@ -27,6 +30,15 @@ npm run whatsapp:setup   # apply the Meta wiring
 | `src/telegram.ts` | Telegram channel: long polling, no webhook |
 | `src/setup/meta.ts` | Graph API request builders for the Meta wiring |
 | `src/setup/run.ts` | The `whatsapp:setup` CLI |
+| `src/store.ts` | One Store interface; memory + Postgres implementations |
+| `src/ledger.ts` | Pure hash-chain primitives (canonical JSON, verify) |
+| `src/ingest.ts` | Media -> blob -> artifact -> classification -> events |
+| `src/estimates.ts` | Spreadsheet parsing, column mapping, line building |
+| `src/reconcile.ts` | The reconciliation engine (high-effort, validated) |
+| `src/tools.ts` | The agent's tools over the store |
+| `src/domain/` | GC system prompt + CSI MasterFormat table |
+| `src/routes/audit.ts` | Token-gated read-only audit pages |
+| `migrations/` | Plain SQL, applied at startup when DATABASE_URL is set |
 
 ## Channels
 
@@ -58,6 +70,14 @@ are `tg:<chat_id>` for Telegram, the bare phone number for WhatsApp.
 ## Conventions
 
 - The agent runs on `claude-opus-5`. Do not downgrade the model for cost.
+- Chat runs at `effort: "low"`; the reconciliation engine and only it runs at
+  `effort: "high"`. Keep that split.
+- The system prompt is cached (`cache_control`); volatile facts (date, active
+  project) go in the user turn, never the system prompt.
+- The ledger is append-only. Corrections are new events. Anything that lets
+  an UPDATE near the events table is a bug.
+- Model outputs that become money (CO lines) are validated in code
+  (validateDelta); never trust arithmetic or citations from the model.
 - Adaptive thinking stays on (the default for this model) at `effort: "low"` —
   disabling thinking on Opus 5 risks tool calls leaking into visible text.
 - `@anthropic-ai/sdk` must be >= 0.121, which is where `fallbacks` landed.
