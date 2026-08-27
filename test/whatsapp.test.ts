@@ -92,3 +92,45 @@ test("ignores delivery-status callbacks and malformed payloads", () => {
   assert.deepEqual(extractMessages({}), []);
   assert.deepEqual(extractMessages(null), []);
 });
+
+test("extracts image and document attachments with captions", () => {
+  const payload = {
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              metadata: { phone_number_id: "PNID" },
+              messages: [
+                {
+                  from: "15551234567",
+                  id: "wamid.IMG",
+                  type: "image",
+                  image: { id: "MEDIA1", mime_type: "image/jpeg", caption: "slab" },
+                },
+                {
+                  from: "15551234567",
+                  id: "wamid.DOC",
+                  type: "document",
+                  document: {
+                    id: "MEDIA2",
+                    mime_type: "application/pdf",
+                    filename: "planA.pdf",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+  const [image, doc] = extractMessages(payload);
+  assert.deepEqual(image?.media, { id: "MEDIA1", mime: "image/jpeg" });
+  assert.equal(image?.text, "slab");
+  assert.deepEqual(doc?.media, {
+    id: "MEDIA2",
+    mime: "application/pdf",
+    filename: "planA.pdf",
+  });
+});

@@ -1,7 +1,14 @@
+import Anthropic from "@anthropic-ai/sdk";
 import express from "express";
 import { setStore } from "./agent.ts";
 import { loadConfig } from "./config.ts";
+import {
+  createClaudeClassifier,
+  createIngestor,
+  type Ingestor,
+} from "./ingest.ts";
 import { createWebhookRouter } from "./routes/webhook.ts";
+import { createBlobStore } from "./storage.ts";
 import { createMemoryStore, createPgStore, type Store } from "./store.ts";
 import { pollTelegram } from "./telegram.ts";
 
@@ -24,6 +31,19 @@ if (config.db) {
 }
 setStore(store);
 
+let ingestor: Ingestor | null = null;
+if (config.storage) {
+  ingestor = createIngestor({
+    store,
+    blobs: createBlobStore(config.storage),
+    classifier: config.anthropicApiKey
+      ? createClaudeClassifier(new Anthropic())
+      : null,
+  });
+} else {
+  console.warn("[storage] not configured -- media will be declined");
+}
+
 const app = express();
 
 // Keep the raw bytes around: the webhook signature is computed over them, and
@@ -45,11 +65,11 @@ app.get("/health", (_req, res) => {
 });
 
 if (config.whatsapp) {
-  app.use(createWebhookRouter(config.whatsapp, store));
+  app.use(createWebhookRouter(config.whatsapp, store, ingestor));
 }
 
 if (config.telegram) {
-  pollTelegram(config.telegram, store).catch((error: unknown) => {
+  pollTelegram(config.telegram, store, ingestor).catch((error: unknown) => {
     console.error("[telegram] polling loop died:", error);
     process.exitCode = 1;
   });

@@ -1,8 +1,10 @@
 import { Router } from "express";
 import type { WhatsAppConfig } from "../config.ts";
 import { forgetConversation, preview, respond } from "../agent.ts";
+import type { Ingestor } from "../ingest.ts";
 import type { Store } from "../store.ts";
 import {
+  downloadWhatsAppMedia,
   extractMessages,
   markAsRead,
   sendText,
@@ -31,6 +33,7 @@ function alreadyHandled(id: string): boolean {
 async function handleMessage(
   config: WhatsAppConfig,
   store: Store,
+  ingestor: Ingestor | null,
   message: InboundMessage,
 ): Promise<void> {
   const contact = await store.ensureContact(message.from);
@@ -48,18 +51,57 @@ async function handleMessage(
   });
   if (recorded === "duplicate") return;
 
+  await markAsRead(config, message.id).catch((error: unknown) => {
+    console.warn("[webhook] could not mark message as read:", error);
+  });
+
+  if (message.media) {
+    if (!ingestor) {
+      await sendText(
+        config,
+        message.from,
+        "I received your file, but blob storage isn't configured on my server yet, so I can't keep it.",
+      );
+      return;
+    }
+    try {
+      // Media URLs expire within minutes; download now, never from a queue.
+      const { bytes, mime } = await downloadWhatsAppMedia(config, message.media.id);
+      const { placeholder } = await ingestor.ingest({
+        bytes,
+        mime,
+        caption: message.text,
+        ...(message.media.filename ? { filename: message.media.filename } : {}),
+        contactId: message.from,
+        projectId: contact.activeProjectId,
+        channel: "whatsapp",
+        sourceMessageId: `wa:${message.id}`,
+      });
+      console.log(`[trace] ${message.from} ingested ${placeholder}`);
+      const reply = await respond(
+        message.from,
+        `${placeholder}${message.text ? `\nSender's note: ${message.text}` : ""}`,
+      );
+      await sendText(config, message.from, reply);
+    } catch (error) {
+      console.error("[webhook] ingest failed:", error);
+      await sendText(
+        config,
+        message.from,
+        "I couldn't store that file. Try again, or send it a different way.",
+      );
+    }
+    return;
+  }
+
   if (message.type !== "text" || !message.text.trim()) {
     await sendText(
       config,
       message.from,
-      "I can only read text messages right now -- send me a few words.",
+      "I can only read text and files right now -- send me a few words or a photo/document.",
     );
     return;
   }
-
-  await markAsRead(config, message.id).catch((error: unknown) => {
-    console.warn("[webhook] could not mark message as read:", error);
-  });
 
   if (message.text.trim().toLowerCase() === "reset") {
     await forgetConversation(message.from);
@@ -73,7 +115,11 @@ async function handleMessage(
   console.log(`[trace] ${message.from} <- "${preview(reply)}"`);
 }
 
-export function createWebhookRouter(config: WhatsAppConfig, store: Store): Router {
+export function createWebhookRouter(
+  config: WhatsAppConfig,
+  store: Store,
+  ingestor: Ingestor | null,
+): Router {
   const router = Router();
 
   // Meta calls this once, when you save the callback URL in the app dashboard.
@@ -103,7 +149,7 @@ export function createWebhookRouter(config: WhatsAppConfig, store: Store): Route
 
     for (const message of extractMessages(req.body)) {
       if (alreadyHandled(message.id)) continue;
-      handleMessage(config, store, message).catch((error: unknown) => {
+      handleMessage(config, store, ingestor, message).catch((error: unknown) => {
         console.error(`[webhook] failed to answer ${message.id}:`, error);
       });
     }

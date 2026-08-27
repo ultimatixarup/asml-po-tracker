@@ -23,6 +23,38 @@ export interface Contact {
   activeProjectId: string | null;
 }
 
+export type ArtifactKind =
+  | "photo"
+  | "receipt"
+  | "plan"
+  | "estimate"
+  | "design_note"
+  | "document"
+  | "other";
+
+export interface Artifact {
+  id: string;
+  projectId: string | null;
+  sha256: string;
+  blobKey: string;
+  mime: string;
+  byteSize: number;
+  kind: ArtifactKind;
+  extraction: Record<string, unknown> | null;
+}
+
+export interface CreateArtifactInput {
+  projectId?: string | null;
+  sha256: string;
+  blobKey: string;
+  mime: string;
+  byteSize: number;
+  kind: ArtifactKind;
+  sourceChannel: string;
+  sourceMessageId?: string | null;
+  uploadedBy: string;
+}
+
 export interface AppendEventInput {
   projectId?: string | null;
   type: EventType;
@@ -56,6 +88,15 @@ export interface Store {
 
   /** Append to the hash-chained ledger. Chain scope is the project (or a global chain for project-less events). */
   appendEvent(input: AppendEventInput): Promise<AppendEventResult>;
+
+  findArtifactBySha(sha256: string): Promise<Artifact | null>;
+  createArtifact(input: CreateArtifactInput): Promise<Artifact>;
+  updateArtifactExtraction(
+    id: string,
+    kind: ArtifactKind,
+    extraction: Record<string, unknown>,
+    model: string,
+  ): Promise<void>;
 }
 
 const chainScope = (projectId: string | null | undefined): string =>
@@ -69,7 +110,9 @@ export function createMemoryStore(): Store {
   const projects: Project[] = [];
   const heads = new Map<string, string>();
   const seenMessages = new Set<string>();
+  const artifacts = new Map<string, Artifact>();
   let nextEventId = 1;
+  let nextArtifactId = 1;
 
   return {
     async loadHistory(contactId, limit) {
@@ -123,6 +166,34 @@ export function createMemoryStore(): Store {
       const hash = computeEventHash(prev, input.payload);
       heads.set(scope, hash);
       return { id: nextEventId++, hash };
+    },
+
+    async findArtifactBySha(sha256) {
+      return artifacts.get(sha256) ?? null;
+    },
+    async createArtifact(input) {
+      const artifact: Artifact = {
+        id: `art-${nextArtifactId++}`,
+        projectId: input.projectId ?? null,
+        sha256: input.sha256,
+        blobKey: input.blobKey,
+        mime: input.mime,
+        byteSize: input.byteSize,
+        kind: input.kind,
+        extraction: null,
+      };
+      artifacts.set(input.sha256, artifact);
+      return artifact;
+    },
+    async updateArtifactExtraction(id, kind, extraction) {
+      for (const artifact of artifacts.values()) {
+        if (artifact.id === id) {
+          artifact.kind = kind;
+          artifact.extraction = extraction;
+          return;
+        }
+      }
+      throw new Error(`Artifact ${id} not found`);
     },
   };
 }
@@ -236,6 +307,63 @@ export function createPgStore(db: Db): Store {
       } finally {
         client.release();
       }
+    },
+
+    async findArtifactBySha(sha256) {
+      const result = await db.query(
+        `SELECT id, project_id, sha256, blob_key, mime, byte_size, kind, extraction
+         FROM artifacts WHERE sha256 = $1`,
+        [sha256],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        projectId: row.project_id,
+        sha256: row.sha256,
+        blobKey: row.blob_key,
+        mime: row.mime,
+        byteSize: row.byte_size,
+        kind: row.kind,
+        extraction: row.extraction,
+      };
+    },
+    async createArtifact(input) {
+      const result = await db.query(
+        `INSERT INTO artifacts
+           (project_id, sha256, blob_key, mime, byte_size, kind,
+            source_channel, source_message_id, uploaded_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id`,
+        [
+          input.projectId ?? null,
+          input.sha256,
+          input.blobKey,
+          input.mime,
+          input.byteSize,
+          input.kind,
+          input.sourceChannel,
+          input.sourceMessageId ?? null,
+          input.uploadedBy,
+        ],
+      );
+      return {
+        id: result.rows[0].id,
+        projectId: input.projectId ?? null,
+        sha256: input.sha256,
+        blobKey: input.blobKey,
+        mime: input.mime,
+        byteSize: input.byteSize,
+        kind: input.kind,
+        extraction: null,
+      };
+    },
+    async updateArtifactExtraction(id, kind, extraction, model) {
+      await db.query(
+        `UPDATE artifacts SET kind = $2, extraction = $3, extraction_model = $4
+         WHERE id = $1`,
+        [id, kind, JSON.stringify(extraction), model],
+      );
     },
   };
 }
