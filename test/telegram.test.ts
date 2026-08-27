@@ -15,7 +15,7 @@ test("extracts chat id and text from getUpdates results", () => {
     },
   ];
   assert.deepEqual(extractTelegramMessages(updates), [
-    { chatId: 42, text: "hello bot" },
+    { chatId: 42, text: "hello bot", updateId: 100 },
   ]);
 });
 

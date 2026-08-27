@@ -1,21 +1,28 @@
 import express from "express";
+import { setStore } from "./agent.ts";
 import { loadConfig } from "./config.ts";
 import { createWebhookRouter } from "./routes/webhook.ts";
+import { createMemoryStore, createPgStore, type Store } from "./store.ts";
 import { pollTelegram } from "./telegram.ts";
 
 const config = loadConfig();
 
+let store: Store;
 if (config.db) {
   const { createPool, runMigrations } = await import("./db.ts");
-  const applied = await runMigrations(createPool(config.db));
+  const pool = createPool(config.db);
+  const applied = await runMigrations(pool);
   console.log(
     applied.length
       ? `[db] applied migrations: ${applied.join(", ")}`
       : "[db] schema up to date",
   );
+  store = createPgStore(pool);
 } else {
   console.warn("[db] DATABASE_URL not set -- running with in-memory state");
+  store = createMemoryStore();
 }
+setStore(store);
 
 const app = express();
 
@@ -38,11 +45,11 @@ app.get("/health", (_req, res) => {
 });
 
 if (config.whatsapp) {
-  app.use(createWebhookRouter(config.whatsapp));
+  app.use(createWebhookRouter(config.whatsapp, store));
 }
 
 if (config.telegram) {
-  pollTelegram(config.telegram).catch((error: unknown) => {
+  pollTelegram(config.telegram, store).catch((error: unknown) => {
     console.error("[telegram] polling loop died:", error);
     process.exitCode = 1;
   });

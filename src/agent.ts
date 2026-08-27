@@ -1,4 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { createMemoryStore, type Store } from "./store.ts";
 
 /**
  * "Hello world" agent: a single Claude call per inbound WhatsApp message, with a
@@ -29,8 +30,12 @@ const GREETING =
   "Hello, world! \u{1F44B} I'm a demo agent running on WhatsApp. " +
   "Set ANTHROPIC_API_KEY on the server and I'll start thinking for real.";
 
-/** In-memory history. Swap for Redis or a database before running more than one instance. */
-const histories = new Map<string, Anthropic.MessageParam[]>();
+/** Defaults to in-memory; index.ts swaps in Postgres when DATABASE_URL is set. */
+let store: Store = createMemoryStore();
+
+export function setStore(next: Store): void {
+  store = next;
+}
 
 /** One-line, quote-safe preview of a message for the trace log. */
 export function preview(text: string, max = 80): string {
@@ -41,8 +46,8 @@ export function preview(text: string, max = 80): string {
 const client = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 /** Drop a contact's conversation, e.g. when they say "reset". */
-export function forgetConversation(contactId: string): void {
-  histories.delete(contactId);
+export async function forgetConversation(contactId: string): Promise<void> {
+  await store.clearHistory(contactId);
 }
 
 /**
@@ -56,11 +61,9 @@ export async function respond(contactId: string, text: string): Promise<string> 
     return GREETING;
   }
 
-  const history = histories.get(contactId) ?? [];
-  const messages: Anthropic.MessageParam[] = [
-    ...history,
-    { role: "user", content: text },
-  ];
+  const history = await store.loadHistory(contactId, HISTORY_LIMIT);
+  const userTurn: Anthropic.MessageParam = { role: "user", content: text };
+  const messages: Anthropic.MessageParam[] = [...history, userTurn];
 
   try {
     const startedAt = Date.now();
@@ -101,7 +104,7 @@ export async function respond(contactId: string, text: string): Promise<string> 
       role: "assistant",
       content: reply,
     };
-    histories.set(contactId, [...messages, assistantTurn].slice(-HISTORY_LIMIT));
+    await store.appendHistory(contactId, [userTurn, assistantTurn]);
     return reply;
   } catch (error) {
     if (error instanceof Anthropic.AuthenticationError) {

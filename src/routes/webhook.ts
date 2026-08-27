@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { WhatsAppConfig } from "../config.ts";
 import { forgetConversation, preview, respond } from "../agent.ts";
+import type { Store } from "../store.ts";
 import {
   extractMessages,
   markAsRead,
@@ -29,8 +30,24 @@ function alreadyHandled(id: string): boolean {
 
 async function handleMessage(
   config: WhatsAppConfig,
+  store: Store,
   message: InboundMessage,
 ): Promise<void> {
+  const contact = await store.ensureContact(message.from);
+  const recorded = await store.appendEvent({
+    projectId: contact.activeProjectId,
+    type: "message.received",
+    actor: message.from,
+    payload: {
+      channel: "whatsapp",
+      messageId: message.id,
+      type: message.type,
+      text: message.text,
+    },
+    sourceMessageId: `wa:${message.id}`,
+  });
+  if (recorded === "duplicate") return;
+
   if (message.type !== "text" || !message.text.trim()) {
     await sendText(
       config,
@@ -45,7 +62,7 @@ async function handleMessage(
   });
 
   if (message.text.trim().toLowerCase() === "reset") {
-    forgetConversation(message.from);
+    await forgetConversation(message.from);
     await sendText(config, message.from, "Forgotten. We're starting fresh.");
     return;
   }
@@ -56,7 +73,7 @@ async function handleMessage(
   console.log(`[trace] ${message.from} <- "${preview(reply)}"`);
 }
 
-export function createWebhookRouter(config: WhatsAppConfig): Router {
+export function createWebhookRouter(config: WhatsAppConfig, store: Store): Router {
   const router = Router();
 
   // Meta calls this once, when you save the callback URL in the app dashboard.
@@ -86,7 +103,7 @@ export function createWebhookRouter(config: WhatsAppConfig): Router {
 
     for (const message of extractMessages(req.body)) {
       if (alreadyHandled(message.id)) continue;
-      handleMessage(config, message).catch((error: unknown) => {
+      handleMessage(config, store, message).catch((error: unknown) => {
         console.error(`[webhook] failed to answer ${message.id}:`, error);
       });
     }
