@@ -1,5 +1,5 @@
 import type { TelegramConfig } from "./config.ts";
-import { forgetConversation, respond } from "./agent.ts";
+import { forgetConversation, preview, respond } from "./agent.ts";
 
 /**
  * Telegram channel. Uses long polling (getUpdates), so it needs no public URL,
@@ -65,6 +65,7 @@ async function handleMessage(
   // Prefixed so a Telegram chat id can never collide with a WhatsApp number.
   const contactId = `tg:${message.chatId}`;
   const text = message.text.trim();
+  console.log(`[trace] ${contactId} -> "${preview(message.text)}"`);
 
   let reply: string;
   if (text === "/start") {
@@ -81,6 +82,7 @@ async function handleMessage(
     chat_id: message.chatId,
     text: reply.slice(0, MAX_BODY_LENGTH),
   });
+  console.log(`[trace] ${contactId} <- "${preview(reply)}"`);
 }
 
 /** Run the polling loop forever. Resolves only if `signal` aborts. */

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { WhatsAppConfig } from "../config.ts";
-import { forgetConversation, respond } from "../agent.ts";
+import { forgetConversation, preview, respond } from "../agent.ts";
 import {
   extractMessages,
   markAsRead,
@@ -50,8 +50,10 @@ async function handleMessage(
     return;
   }
 
+  console.log(`[trace] ${message.from} -> "${preview(message.text)}"`);
   const reply = await respond(message.from, message.text);
   await sendText(config, message.from, reply);
+  console.log(`[trace] ${message.from} <- "${preview(reply)}"`);
 }
 
 export function createWebhookRouter(config: WhatsAppConfig): Router {

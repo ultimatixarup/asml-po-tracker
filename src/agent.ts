@@ -32,6 +32,12 @@ const GREETING =
 /** In-memory history. Swap for Redis or a database before running more than one instance. */
 const histories = new Map<string, Anthropic.MessageParam[]>();
 
+/** One-line, quote-safe preview of a message for the trace log. */
+export function preview(text: string, max = 80): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}\u2026` : flat;
+}
+
 const client = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 /** Drop a contact's conversation, e.g. when they say "reset". */
@@ -57,6 +63,7 @@ export async function respond(contactId: string, text: string): Promise<string> 
   ];
 
   try {
+    const startedAt = Date.now();
     const response = await client.beta.messages.create({
       model: MODEL,
       max_tokens: MAX_TOKENS,
@@ -69,6 +76,12 @@ export async function respond(contactId: string, text: string): Promise<string> 
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
     });
+
+    console.log(
+      `[trace] ${contactId} model ${response.model} ${Date.now() - startedAt}ms ` +
+        `in=${response.usage.input_tokens} out=${response.usage.output_tokens} ` +
+        `stop=${response.stop_reason}`,
+    );
 
     if (response.stop_reason === "refusal") {
       return "Sorry, I can't help with that one. Ask me something else?";
