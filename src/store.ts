@@ -1,6 +1,11 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import type { Db } from "./db.ts";
-import { computeEventHash, GENESIS_HASH, type EventType } from "./ledger.ts";
+import {
+  computeEventHash,
+  GENESIS_HASH,
+  type ChainedEvent,
+  type EventType,
+} from "./ledger.ts";
 
 export type { EventType } from "./ledger.ts";
 
@@ -185,6 +190,11 @@ export interface Store {
   /** Validates the transition; the caller writes the co.status_changed event. */
   updateChangeOrderStatus(id: string, to: CoStatus): Promise<ChangeOrder>;
 
+  getProject(id: string): Promise<Project | null>;
+  listEstimates(projectId: string): Promise<Estimate[]>;
+  /** The full chain for one project scope, in insertion order, for verification. */
+  getChain(projectId: string | null): Promise<ChainedEvent[]>;
+
   listEvents(
     projectId: string | null,
     opts?: { type?: EventType; limit?: number },
@@ -213,7 +223,7 @@ export function createMemoryStore(): Store {
   const heads = new Map<string, string>();
   const seenMessages = new Set<string>();
   const artifacts = new Map<string, Artifact>();
-  const events: EventRecord[] = [];
+  const events: (EventRecord & { prevHash: string; hash: string })[] = [];
   const changeOrders: ChangeOrder[] = [];
   const coLines = new Map<string, CoLine[]>();
   let nextCoLineId = 1;
@@ -283,6 +293,8 @@ export function createMemoryStore(): Store {
         payload: input.payload,
         artifactId: input.artifactId ?? null,
         createdAt: new Date().toISOString(),
+        prevHash: prev,
+        hash,
       });
       return { id, hash };
     },
@@ -324,6 +336,22 @@ export function createMemoryStore(): Store {
       }
       co.status = to;
       return co;
+    },
+
+    async getProject(id) {
+      return projects.find((p) => p.id === id) ?? null;
+    },
+    async listEstimates(projectId) {
+      return estimates.filter((e) => e.projectId === projectId);
+    },
+    async getChain(projectId) {
+      return events
+        .filter((e) => e.projectId === projectId)
+        .map((e) => ({
+          payload: e.payload,
+          prev_hash: e.prevHash,
+          hash: e.hash,
+        }));
     },
 
     async listEvents(projectId, opts = {}) {
@@ -752,6 +780,36 @@ export function createPgStore(db: Db): Store {
         to,
       ]);
       return { ...coFromRow(row), status: to };
+    },
+
+    async getProject(id) {
+      const result = await db.query(
+        `SELECT id, code, name, address, status FROM projects WHERE id = $1`,
+        [id],
+      );
+      return result.rows[0] ?? null;
+    },
+    async listEstimates(projectId) {
+      const result = await db.query(
+        `SELECT id, project_id, version, status, total FROM estimates
+         WHERE project_id = $1 ORDER BY version`,
+        [projectId],
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        projectId: row.project_id,
+        version: row.version,
+        status: row.status,
+        total: Number(row.total),
+      }));
+    },
+    async getChain(projectId) {
+      const result = await db.query(
+        `SELECT payload, prev_hash, hash FROM events
+         WHERE project_id IS NOT DISTINCT FROM $1 ORDER BY id`,
+        [projectId],
+      );
+      return result.rows;
     },
 
     async listEvents(projectId, opts = {}) {

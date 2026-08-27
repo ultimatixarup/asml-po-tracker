@@ -11,6 +11,7 @@ import {
 import { createClaudeColumnMapper } from "./estimates.ts";
 import { registerNotifier } from "./notify.ts";
 import { createClaudeDeltaGenerator } from "./reconcile.ts";
+import { createAuditRouter } from "./routes/audit.ts";
 import { createWebhookRouter } from "./routes/webhook.ts";
 import { createBlobStore } from "./storage.ts";
 import { createMemoryStore, createPgStore, type Store } from "./store.ts";
@@ -75,6 +76,11 @@ app.get("/health", (_req, res) => {
 
 if (config.whatsapp) {
   app.use(createWebhookRouter(config.whatsapp, store, ingestor));
+}
+
+if (config.auditToken) {
+  app.use(createAuditRouter(store, blobs, config.auditToken));
+  console.log("[audit] read-only audit view enabled at /audit");
 }
 
 if (config.whatsapp) {
