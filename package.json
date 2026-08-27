@@ -21,12 +21,15 @@
     "@aws-sdk/client-s3": "^3.1119.0",
     "@aws-sdk/s3-request-presigner": "^3.1119.0",
     "dotenv": "^17.0.0",
+    "exceljs": "^4.4.0",
     "express": "^5.1.0",
+    "papaparse": "^5.7.0",
     "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
+    "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.23.1",
     "typescript": "^5.7.0"
   }

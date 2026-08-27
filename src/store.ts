@@ -55,6 +55,32 @@ export interface CreateArtifactInput {
   uploadedBy: string;
 }
 
+export interface Estimate {
+  id: string;
+  projectId: string;
+  version: number;
+  status: "current" | "superseded";
+  total: number;
+}
+
+export interface EstimateLine {
+  id: string;
+  lineNo: number;
+  csiCode: string | null;
+  description: string;
+  qty: number | null;
+  unit: string | null;
+  unitCost: number | null;
+  total: number;
+}
+
+export interface CreateEstimateInput {
+  projectId: string;
+  sourceArtifactId?: string | null;
+  total: number;
+  lines: Omit<EstimateLine, "id">[];
+}
+
 export interface AppendEventInput {
   projectId?: string | null;
   type: EventType;
@@ -89,6 +115,11 @@ export interface Store {
   /** Append to the hash-chained ledger. Chain scope is the project (or a global chain for project-less events). */
   appendEvent(input: AppendEventInput): Promise<AppendEventResult>;
 
+  /** New version supersedes the current one atomically. */
+  createEstimate(input: CreateEstimateInput): Promise<Estimate>;
+  getCurrentEstimate(projectId: string): Promise<Estimate | null>;
+  getEstimateLines(estimateId: string): Promise<EstimateLine[]>;
+
   findArtifactBySha(sha256: string): Promise<Artifact | null>;
   createArtifact(input: CreateArtifactInput): Promise<Artifact>;
   updateArtifactExtraction(
@@ -111,8 +142,11 @@ export function createMemoryStore(): Store {
   const heads = new Map<string, string>();
   const seenMessages = new Set<string>();
   const artifacts = new Map<string, Artifact>();
+  const estimates: Estimate[] = [];
+  const estimateLines = new Map<string, EstimateLine[]>();
   let nextEventId = 1;
   let nextArtifactId = 1;
+  let nextLineId = 1;
 
   return {
     async loadHistory(contactId, limit) {
@@ -166,6 +200,34 @@ export function createMemoryStore(): Store {
       const hash = computeEventHash(prev, input.payload);
       heads.set(scope, hash);
       return { id: nextEventId++, hash };
+    },
+
+    async createEstimate(input) {
+      const prior = estimates.filter((e) => e.projectId === input.projectId);
+      for (const e of prior) if (e.status === "current") e.status = "superseded";
+      const estimate: Estimate = {
+        id: `est-${estimates.length + 1}`,
+        projectId: input.projectId,
+        version: prior.length + 1,
+        status: "current",
+        total: input.total,
+      };
+      estimates.push(estimate);
+      estimateLines.set(
+        estimate.id,
+        input.lines.map((line) => ({ ...line, id: `line-${nextLineId++}` })),
+      );
+      return estimate;
+    },
+    async getCurrentEstimate(projectId) {
+      return (
+        estimates.find(
+          (e) => e.projectId === projectId && e.status === "current",
+        ) ?? null
+      );
+    },
+    async getEstimateLines(estimateId) {
+      return [...(estimateLines.get(estimateId) ?? [])];
     },
 
     async findArtifactBySha(sha256) {
@@ -307,6 +369,96 @@ export function createPgStore(db: Db): Store {
       } finally {
         client.release();
       }
+    },
+
+    async createEstimate(input) {
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          `estimate:${input.projectId}`,
+        ]);
+        const prior = await client.query(
+          `SELECT COALESCE(MAX(version), 0) AS max FROM estimates WHERE project_id = $1`,
+          [input.projectId],
+        );
+        const version = Number(prior.rows[0].max) + 1;
+        await client.query(
+          `UPDATE estimates SET status = 'superseded'
+           WHERE project_id = $1 AND status = 'current'`,
+          [input.projectId],
+        );
+        const inserted = await client.query(
+          `INSERT INTO estimates (project_id, version, source_artifact_id, status, total)
+           VALUES ($1, $2, $3, 'current', $4) RETURNING id`,
+          [input.projectId, version, input.sourceArtifactId ?? null, input.total],
+        );
+        const estimateId = inserted.rows[0].id;
+        for (const line of input.lines) {
+          await client.query(
+            `INSERT INTO estimate_lines
+               (estimate_id, line_no, csi_code, description, qty, unit, unit_cost, total, raw)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [
+              estimateId,
+              line.lineNo,
+              line.csiCode,
+              line.description,
+              line.qty,
+              line.unit,
+              line.unitCost,
+              line.total,
+              null,
+            ],
+          );
+        }
+        await client.query("COMMIT");
+        return {
+          id: estimateId,
+          projectId: input.projectId,
+          version,
+          status: "current" as const,
+          total: input.total,
+        };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async getCurrentEstimate(projectId) {
+      const result = await db.query(
+        `SELECT id, project_id, version, status, total FROM estimates
+         WHERE project_id = $1 AND status = 'current'`,
+        [projectId],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        projectId: row.project_id,
+        version: row.version,
+        status: row.status,
+        total: Number(row.total),
+      };
+    },
+    async getEstimateLines(estimateId) {
+      const result = await db.query(
+        `SELECT id, line_no, csi_code, description, qty, unit, unit_cost, total
+         FROM estimate_lines WHERE estimate_id = $1 ORDER BY line_no`,
+        [estimateId],
+      );
+      return result.rows.map((row) => ({
+        id: row.id,
+        lineNo: row.line_no,
+        csiCode: row.csi_code,
+        description: row.description,
+        qty: row.qty === null ? null : Number(row.qty),
+        unit: row.unit,
+        unitCost: row.unit_cost === null ? null : Number(row.unit_cost),
+        total: Number(row.total),
+      }));
     },
 
     async findArtifactBySha(sha256) {
