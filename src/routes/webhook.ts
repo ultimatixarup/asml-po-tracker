@@ -1,5 +1,5 @@
 import { Router } from "express";
-import type { Config } from "../config.ts";
+import type { WhatsAppConfig } from "../config.ts";
 import { forgetConversation, respond } from "../agent.ts";
 import {
   extractMessages,
@@ -28,7 +28,7 @@ function alreadyHandled(id: string): boolean {
 }
 
 async function handleMessage(
-  config: Config,
+  config: WhatsAppConfig,
   message: InboundMessage,
 ): Promise<void> {
   if (message.type !== "text" || !message.text.trim()) {
@@ -54,7 +54,7 @@ async function handleMessage(
   await sendText(config, message.from, reply);
 }
 
-export function createWebhookRouter(config: Config): Router {
+export function createWebhookRouter(config: WhatsAppConfig): Router {
   const router = Router();
 
   // Meta calls this once, when you save the callback URL in the app dashboard.

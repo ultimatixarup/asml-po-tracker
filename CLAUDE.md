@@ -24,8 +24,15 @@ npm run whatsapp:setup   # apply the Meta wiring
 | `src/routes/webhook.ts` | GET handshake, POST delivery, dedupe, dispatch |
 | `src/agent.ts` | The Claude call and per-contact history |
 | `src/whatsapp.ts` | Signature verification, payload parsing, Graph API send |
+| `src/telegram.ts` | Telegram channel: long polling, no webhook |
 | `src/setup/meta.ts` | Graph API request builders for the Meta wiring |
 | `src/setup/run.ts` | The `whatsapp:setup` CLI |
+
+## Channels
+
+WhatsApp and Telegram are independent: each activates when its variables are
+set, and startup fails if neither is. Both share `src/agent.ts` -- contact keys
+are `tg:<chat_id>` for Telegram, the bare phone number for WhatsApp.
 
 ## Things that will bite you
 

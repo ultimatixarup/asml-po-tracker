@@ -1,8 +1,7 @@
 import "dotenv/config";
 
-/** Configuration read from the environment, validated once at startup. */
-export interface Config {
-  port: number;
+/** Credentials for the WhatsApp Cloud API channel. */
+export interface WhatsAppConfig {
   /** Token you invent and paste into the Meta webhook setup form. */
   verifyToken: string;
   /** Meta app secret, used to verify the X-Hub-Signature-256 header. */
@@ -12,28 +11,65 @@ export interface Config {
   /** Permanent (system user) access token with whatsapp_business_messaging. */
   accessToken: string;
   graphApiVersion: string;
+}
+
+/** Credentials for the Telegram bot channel. */
+export interface TelegramConfig {
+  /** Bot token from @BotFather. */
+  botToken: string;
+}
+
+/** Configuration read from the environment, validated once at startup. */
+export interface Config {
+  port: number;
+  /** Present when all WhatsApp variables are set. */
+  whatsapp?: WhatsAppConfig;
+  /** Present when TELEGRAM_BOT_TOKEN is set. */
+  telegram?: TelegramConfig;
   /** Present only when the agent should think; absent means canned replies. */
   anthropicApiKey?: string;
 }
 
-function required(name: string): string {
-  const value = process.env[name];
-  if (!value) {
+const WHATSAPP_VARS = [
+  "WHATSAPP_VERIFY_TOKEN",
+  "WHATSAPP_APP_SECRET",
+  "WHATSAPP_PHONE_NUMBER_ID",
+  "WHATSAPP_ACCESS_TOKEN",
+] as const;
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
+  const config: Config = {
+    port: Number(env.PORT ?? 3000),
+    anthropicApiKey: env.ANTHROPIC_API_KEY,
+  };
+
+  const setWhatsAppVars = WHATSAPP_VARS.filter((name) => env[name]);
+  if (setWhatsAppVars.length === WHATSAPP_VARS.length) {
+    config.whatsapp = {
+      verifyToken: env.WHATSAPP_VERIFY_TOKEN!,
+      appSecret: env.WHATSAPP_APP_SECRET!,
+      phoneNumberId: env.WHATSAPP_PHONE_NUMBER_ID!,
+      accessToken: env.WHATSAPP_ACCESS_TOKEN!,
+      graphApiVersion: env.GRAPH_API_VERSION ?? "v23.0",
+    };
+  } else if (setWhatsAppVars.length > 0) {
+    const missing = WHATSAPP_VARS.filter((name) => !env[name]);
     throw new Error(
-      `Missing required environment variable ${name}. Copy .env.example to .env and fill it in.`,
+      `WhatsApp is partially configured -- missing ${missing.join(", ")}. ` +
+        `Set all of them to enable WhatsApp, or none to disable it.`,
     );
   }
-  return value;
-}
 
-export function loadConfig(): Config {
-  return {
-    port: Number(process.env.PORT ?? 3000),
-    verifyToken: required("WHATSAPP_VERIFY_TOKEN"),
-    appSecret: required("WHATSAPP_APP_SECRET"),
-    phoneNumberId: required("WHATSAPP_PHONE_NUMBER_ID"),
-    accessToken: required("WHATSAPP_ACCESS_TOKEN"),
-    graphApiVersion: process.env.GRAPH_API_VERSION ?? "v23.0",
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-  };
+  if (env.TELEGRAM_BOT_TOKEN) {
+    config.telegram = { botToken: env.TELEGRAM_BOT_TOKEN };
+  }
+
+  if (!config.whatsapp && !config.telegram) {
+    throw new Error(
+      "No chat channel is configured. Set the WHATSAPP_* variables, " +
+        "TELEGRAM_BOT_TOKEN, or both. See .env.example.",
+    );
+  }
+
+  return config;
 }

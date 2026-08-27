@@ -20,6 +20,14 @@ WhatsApp user  ──▶  Meta Cloud API  ──▶  POST /webhook  ──▶  C
 - Falls back to a canned greeting when `ANTHROPIC_API_KEY` is unset, so you can
   get the WhatsApp plumbing working before adding a model.
 
+## Telegram, the five-minute alternative
+
+The same agent can be a Telegram handle with none of the Meta setup: message
+[@BotFather](https://t.me/botfather), send `/newbot`, put the token it returns
+in `TELEGRAM_BOT_TOKEN`, and run `npm run dev`. Telegram uses long polling, so
+this works from a laptop with no public URL. Set both Telegram and WhatsApp
+variables and one process serves both handles.
+
 ## Quick start
 
 ```bash

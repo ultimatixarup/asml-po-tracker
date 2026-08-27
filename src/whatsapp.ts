@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { Config } from "./config.ts";
+import type { WhatsAppConfig } from "./config.ts";
 
 /** The subset of the Cloud API webhook payload this agent acts on. */
 export interface InboundMessage {
@@ -84,7 +84,7 @@ export function extractMessages(payload: unknown): InboundMessage[] {
 const MAX_BODY_LENGTH = 4096;
 
 async function callGraph(
-  config: Config,
+  config: WhatsAppConfig,
   body: Record<string, unknown>,
 ): Promise<void> {
   const url = `https://graph.facebook.com/${config.graphApiVersion}/${config.phoneNumberId}/messages`;
@@ -105,7 +105,7 @@ async function callGraph(
 
 /** Send a plain-text WhatsApp message to a contact. */
 export async function sendText(
-  config: Config,
+  config: WhatsAppConfig,
   to: string,
   text: string,
 ): Promise<void> {
@@ -120,7 +120,7 @@ export async function sendText(
 
 /** Show the blue ticks while the agent is thinking. Best-effort. */
 export async function markAsRead(
-  config: Config,
+  config: WhatsAppConfig,
   messageId: string,
 ): Promise<void> {
   await callGraph(config, {

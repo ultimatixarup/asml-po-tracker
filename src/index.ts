@@ -1,6 +1,7 @@
 import express from "express";
 import { loadConfig } from "./config.ts";
 import { createWebhookRouter } from "./routes/webhook.ts";
+import { pollTelegram } from "./telegram.ts";
 
 const config = loadConfig();
 const app = express();
@@ -15,14 +16,27 @@ app.use(
   }),
 );
 
+const channels: string[] = [];
+if (config.whatsapp) channels.push("whatsapp");
+if (config.telegram) channels.push("telegram");
+
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok", agent: "hello-world" });
+  res.json({ status: "ok", agent: "hello-world", channels });
 });
 
-app.use(createWebhookRouter(config));
+if (config.whatsapp) {
+  app.use(createWebhookRouter(config.whatsapp));
+}
+
+if (config.telegram) {
+  pollTelegram(config.telegram).catch((error: unknown) => {
+    console.error("[telegram] polling loop died:", error);
+    process.exitCode = 1;
+  });
+}
 
 app.listen(config.port, () => {
-  console.log(`[server] listening on :${config.port}`);
+  console.log(`[server] listening on :${config.port} (channels: ${channels.join(", ")})`);
   if (!config.anthropicApiKey) {
     console.warn(
       "[server] ANTHROPIC_API_KEY is not set -- replying with a canned greeting",
