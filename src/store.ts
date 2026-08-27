@@ -2,6 +2,8 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { Db } from "./db.ts";
 import { computeEventHash, GENESIS_HASH, type EventType } from "./ledger.ts";
 
+export type { EventType } from "./ledger.ts";
+
 /**
  * Persistence behind one interface with two implementations: in-memory (the
  * default; preserves the original hello-world behavior and keeps tests
@@ -91,6 +93,16 @@ export interface AppendEventInput {
   sourceMessageId?: string | null;
 }
 
+export interface EventRecord {
+  id: number | string;
+  projectId: string | null;
+  type: EventType;
+  actor: string;
+  payload: Record<string, unknown>;
+  artifactId: string | null;
+  createdAt: string;
+}
+
 export type AppendEventResult =
   | { id: number | string; hash: string }
   | "duplicate";
@@ -120,6 +132,12 @@ export interface Store {
   getCurrentEstimate(projectId: string): Promise<Estimate | null>;
   getEstimateLines(estimateId: string): Promise<EstimateLine[]>;
 
+  listEvents(
+    projectId: string | null,
+    opts?: { type?: EventType; limit?: number },
+  ): Promise<EventRecord[]>;
+
+  getArtifact(id: string): Promise<Artifact | null>;
   findArtifactBySha(sha256: string): Promise<Artifact | null>;
   createArtifact(input: CreateArtifactInput): Promise<Artifact>;
   updateArtifactExtraction(
@@ -142,6 +160,7 @@ export function createMemoryStore(): Store {
   const heads = new Map<string, string>();
   const seenMessages = new Set<string>();
   const artifacts = new Map<string, Artifact>();
+  const events: EventRecord[] = [];
   const estimates: Estimate[] = [];
   const estimateLines = new Map<string, EstimateLine[]>();
   let nextEventId = 1;
@@ -199,7 +218,34 @@ export function createMemoryStore(): Store {
       const prev = heads.get(scope) ?? GENESIS_HASH;
       const hash = computeEventHash(prev, input.payload);
       heads.set(scope, hash);
-      return { id: nextEventId++, hash };
+      const id = nextEventId++;
+      events.push({
+        id,
+        projectId: input.projectId ?? null,
+        type: input.type,
+        actor: input.actor,
+        payload: input.payload,
+        artifactId: input.artifactId ?? null,
+        createdAt: new Date().toISOString(),
+      });
+      return { id, hash };
+    },
+
+    async listEvents(projectId, opts = {}) {
+      const limit = opts.limit ?? 20;
+      return events
+        .filter(
+          (e) =>
+            e.projectId === projectId && (!opts.type || e.type === opts.type),
+        )
+        .slice(-limit);
+    },
+
+    async getArtifact(id) {
+      for (const artifact of artifacts.values()) {
+        if (artifact.id === id) return artifact;
+      }
+      return null;
     },
 
     async createEstimate(input) {
@@ -461,6 +507,46 @@ export function createPgStore(db: Db): Store {
       }));
     },
 
+    async listEvents(projectId, opts = {}) {
+      const limit = opts.limit ?? 20;
+      const result = await db.query(
+        `SELECT id, project_id, type, actor, payload, artifact_id, created_at
+         FROM events
+         WHERE project_id IS NOT DISTINCT FROM $1
+           AND ($2::text IS NULL OR type = $2)
+         ORDER BY id DESC LIMIT $3`,
+        [projectId, opts.type ?? null, limit],
+      );
+      return result.rows.reverse().map((row) => ({
+        id: Number(row.id),
+        projectId: row.project_id,
+        type: row.type,
+        actor: row.actor,
+        payload: row.payload,
+        artifactId: row.artifact_id,
+        createdAt: row.created_at.toISOString(),
+      }));
+    },
+
+    async getArtifact(id) {
+      const result = await db.query(
+        `SELECT id, project_id, sha256, blob_key, mime, byte_size, kind, extraction
+         FROM artifacts WHERE id = $1`,
+        [id],
+      );
+      const row = result.rows[0];
+      if (!row) return null;
+      return {
+        id: row.id,
+        projectId: row.project_id,
+        sha256: row.sha256,
+        blobKey: row.blob_key,
+        mime: row.mime,
+        byteSize: row.byte_size,
+        kind: row.kind,
+        extraction: row.extraction,
+      };
+    },
     async findArtifactBySha(sha256) {
       const result = await db.query(
         `SELECT id, project_id, sha256, blob_key, mime, byte_size, kind, extraction

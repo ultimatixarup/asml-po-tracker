@@ -1,12 +1,14 @@
+import "dotenv/config";
 import Anthropic from "@anthropic-ai/sdk";
 import express from "express";
-import { setStore } from "./agent.ts";
+import { setAgentDeps } from "./agent.ts";
 import { loadConfig } from "./config.ts";
 import {
   createClaudeClassifier,
   createIngestor,
   type Ingestor,
 } from "./ingest.ts";
+import { createClaudeColumnMapper } from "./estimates.ts";
 import { createWebhookRouter } from "./routes/webhook.ts";
 import { createBlobStore } from "./storage.ts";
 import { createMemoryStore, createPgStore, type Store } from "./store.ts";
@@ -29,16 +31,20 @@ if (config.db) {
   console.warn("[db] DATABASE_URL not set -- running with in-memory state");
   store = createMemoryStore();
 }
-setStore(store);
+const blobs = config.storage ? createBlobStore(config.storage) : null;
+const anthropic = config.anthropicApiKey ? new Anthropic() : null;
+setAgentDeps({
+  store,
+  blobs,
+  mapper: anthropic ? createClaudeColumnMapper(anthropic) : null,
+});
 
 let ingestor: Ingestor | null = null;
-if (config.storage) {
+if (blobs) {
   ingestor = createIngestor({
     store,
-    blobs: createBlobStore(config.storage),
-    classifier: config.anthropicApiKey
-      ? createClaudeClassifier(new Anthropic())
-      : null,
+    blobs,
+    classifier: anthropic ? createClaudeClassifier(anthropic) : null,
   });
 } else {
   console.warn("[storage] not configured -- media will be declined");
