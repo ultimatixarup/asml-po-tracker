@@ -1,0 +1,27 @@
+# Render blueprint -- deploys from the repo with no CLI. Point Render at this
+# file, then fill in the secret values in the dashboard (they are marked
+# sync:false so they are never committed).
+services:
+  - type: web
+    name: hello-world-whatsapp-agent
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_ACCESS_TOKEN
+        sync: false
+      - key: WHATSAPP_BUSINESS_ACCOUNT_ID
+        sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

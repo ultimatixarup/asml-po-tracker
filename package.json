@@ -12,7 +12,9 @@
     "start": "node dist/index.js",
     "dev": "node --watch --experimental-strip-types src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test test/*.test.ts"
+    "test": "node --experimental-strip-types --test test/*.test.ts",
+    "whatsapp:setup": "node --experimental-strip-types src/setup/run.ts",
+    "whatsapp:check": "node --experimental-strip-types src/setup/run.ts --check"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.121.0",

@@ -1,0 +1,40 @@
+# Fly.io deployment. Gives the service a public HTTPS URL with a managed cert,
+# which is what the Meta webhook requires.
+#
+#   fly launch --no-deploy --copy-config   # first time, claims the app name
+#   fly secrets set WHATSAPP_VERIFY_TOKEN=... WHATSAPP_APP_SECRET=... \
+#                   WHATSAPP_PHONE_NUMBER_ID=... WHATSAPP_ACCESS_TOKEN=... \
+#                   ANTHROPIC_API_KEY=...
+#   fly deploy
+
+app = "hello-world-whatsapp-agent"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  # Meta retries a failed delivery, but a cold start still costs the user a
+  # slow first reply -- keep one instance warm.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.http_options.response]
+    pristine = true
+
+[[http_service.checks]]
+  grace_period = "10s"
+  interval = "30s"
+  method = "GET"
+  timeout = "5s"
+  path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

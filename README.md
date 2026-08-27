@@ -30,41 +30,67 @@ npm run dev             # or: npm run build && npm start
 
 `GET /health` returns `{"status":"ok","agent":"hello-world"}` once it is up.
 
-## Making it reachable as a WhatsApp handle
+## Deploying
 
-The webhook must be on a public HTTPS URL. For local development, tunnel it:
+The webhook needs a public HTTPS URL, so the agent has to run somewhere Meta can
+reach. Any container host works; two are configured here.
+
+**Fly.io** (`fly.toml`):
 
 ```bash
-npx cloudflared tunnel --url http://localhost:3000
-# or: ngrok http 3000
+fly launch --no-deploy --copy-config
+fly secrets set WHATSAPP_VERIFY_TOKEN=... WHATSAPP_APP_SECRET=... \
+                WHATSAPP_PHONE_NUMBER_ID=... WHATSAPP_ACCESS_TOKEN=... \
+                WHATSAPP_BUSINESS_ACCOUNT_ID=... META_APP_ID=... \
+                ANTHROPIC_API_KEY=...
+fly deploy
 ```
 
-Then, in the [Meta app dashboard](https://developers.facebook.com/apps):
+**Render** (`render.yaml`): point Render at the repo and it picks up the
+blueprint; fill the secrets in the dashboard.
 
-1. **Create an app** of type *Business* and add the **WhatsApp** product. This
-   gives you a test phone number for free — that number is the chat handle.
-2. **WhatsApp → API Setup** — copy the **Phone number ID** into
-   `WHATSAPP_PHONE_NUMBER_ID`, and the temporary access token into
-   `WHATSAPP_ACCESS_TOKEN`. Add your own number under *To* so the test number is
-   allowed to message you.
-3. **App settings → Basic** — copy the **App Secret** into
-   `WHATSAPP_APP_SECRET`.
-4. Invent any random string, put it in `WHATSAPP_VERIFY_TOKEN`, and start the
-   server before the next step.
-5. **WhatsApp → Configuration → Edit webhook** — set the callback URL to
-   `https://<your-tunnel>/webhook` and the verify token to the same string.
-   Meta calls `GET /webhook` immediately; the log line `[webhook] verified by
-   Meta` means it worked.
-6. In the same panel, **subscribe to the `messages` field**. Without this,
-   nothing is delivered.
-7. Message the test number from WhatsApp. You should get a reply.
+Either way, confirm `https://<your-host>/health` returns
+`{"status":"ok","agent":"hello-world"}` before wiring up Meta.
 
-The temporary token expires after 24 hours. For anything lasting, create a
-system user in Meta Business Settings, grant it `whatsapp_business_messaging`
-on the WhatsApp account, and generate a permanent token.
+For local development, tunnel instead of deploying:
 
-To use your own phone number as the handle instead of the test number, add it
-under **WhatsApp → API Setup → Add phone number** and complete Meta's business
+```bash
+npx cloudflared tunnel --url http://localhost:3000   # or: ngrok http 3000
+```
+
+## Enabling the WhatsApp handle
+
+First, in the [Meta app dashboard](https://developers.facebook.com/apps), create
+a *Business* app, add the **WhatsApp** product, and collect four values into
+`.env`: the App ID and App Secret (App settings -> Basic), and the Phone number
+ID and WhatsApp Business Account ID (WhatsApp -> API Setup). The free test number
+the dashboard provisions works as the handle. Add your own number under *To* so
+the test number is allowed to message you.
+
+Then set `PUBLIC_URL` to the deployed URL and run:
+
+```bash
+npm run whatsapp:check    # report current state, change nothing
+npm run whatsapp:setup    # apply the wiring
+```
+
+That registers the callback URL against the app, subscribes it to the `messages`
+field, and subscribes the WhatsApp Business Account to the app — the step people
+most often miss, without which nothing is delivered. **The service must already
+be live at `PUBLIC_URL`**: Meta performs the verification handshake during the
+call, and setup fails if the URL is down.
+
+Message the number from WhatsApp and the agent should reply.
+
+### Tokens
+
+The temporary token in API Setup expires after 24 hours. For anything lasting,
+create a system user in Meta Business Settings and grant it both
+`whatsapp_business_messaging` (sending) and `whatsapp_business_management`
+(subscribing the webhook), then generate a permanent token.
+
+To use your own number as the handle instead of the test number, add it under
+**WhatsApp -> API Setup -> Add phone number** and complete Meta's business
 verification.
 
 ### The 24-hour window
@@ -82,6 +108,9 @@ template.
 | `WHATSAPP_APP_SECRET` | yes | Verifies `X-Hub-Signature-256` on deliveries |
 | `WHATSAPP_PHONE_NUMBER_ID` | yes | The business number that sends replies |
 | `WHATSAPP_ACCESS_TOKEN` | yes | Graph API token for sending |
+| `META_APP_ID` | setup only | Identifies the app the webhook is registered on |
+| `WHATSAPP_BUSINESS_ACCOUNT_ID` | setup only | The WABA subscribed to the app |
+| `PUBLIC_URL` | setup only | Deployed HTTPS base URL, no trailing slash |
 | `ANTHROPIC_API_KEY` | no | Without it, replies are a canned greeting |
 | `GRAPH_API_VERSION` | no | Defaults to `v23.0` |
 | `PORT` | no | Defaults to `3000` |
@@ -106,17 +135,19 @@ src/config.ts         Environment loading and validation
 src/routes/webhook.ts GET verification, POST delivery, dedupe, dispatch
 src/agent.ts          The Claude call and per-contact history
 src/whatsapp.ts       Signature verification, payload parsing, Graph API send
-test/                 Unit tests for signature and payload handling
+src/setup/meta.ts     Graph API request builders for the Meta wiring
+src/setup/run.ts      `npm run whatsapp:setup` -- registers the webhook
+test/                 Unit tests for signature, payload and setup requests
 ```
 
 ## Tests
 
 ```bash
-npm test        # signature verification and webhook payload parsing
+npm test        # signature verification, payload parsing, setup requests
 npm run typecheck
 ```
 
-## Deploying
+## Running the container directly
 
 Any host that gives you a public HTTPS URL works — the container listens on
 `PORT`.
@@ -125,6 +156,8 @@ Any host that gives you a public HTTPS URL works — the container listens on
 docker build -t hello-world-whatsapp-agent .
 docker run --env-file .env -p 3000:3000 hello-world-whatsapp-agent
 ```
+
+## Known limits
 
 Conversation history is in memory, so a restart forgets it and running more than
 one instance splits it. Move `histories` in `src/agent.ts` to Redis or a
