@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { SYSTEM_PROMPT } from "./domain/prompt.ts";
 import type { ColumnMapper } from "./estimates.ts";
+import { notifyContact } from "./notify.ts";
+import type { DeltaGenerator } from "./reconcile.ts";
 import type { BlobStore } from "./storage.ts";
 import { createMemoryStore, type Store } from "./store.ts";
 import { buildTools } from "./tools.ts";
@@ -33,10 +35,18 @@ interface AgentDeps {
   store: Store;
   blobs: BlobStore | null;
   mapper: ColumnMapper | null;
+  generate: DeltaGenerator | null;
+  notify: (contactId: string, text: string) => Promise<boolean>;
 }
 
 /** Defaults to in-memory; index.ts swaps in real deps at startup. */
-let deps: AgentDeps = { store: createMemoryStore(), blobs: null, mapper: null };
+let deps: AgentDeps = {
+  store: createMemoryStore(),
+  blobs: null,
+  mapper: null,
+  generate: null,
+  notify: notifyContact,
+};
 
 export function setAgentDeps(next: Partial<AgentDeps>): void {
   deps = { ...deps, ...next };

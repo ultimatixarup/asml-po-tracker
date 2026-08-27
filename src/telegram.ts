@@ -94,6 +94,18 @@ async function api(
   return parsed.result;
 }
 
+/** Push a message to a chat outside the poll loop (async notifications). */
+export async function sendTelegramText(
+  config: TelegramConfig,
+  chatId: number,
+  text: string,
+): Promise<void> {
+  await api(config, "sendMessage", {
+    chat_id: chatId,
+    text: text.slice(0, MAX_BODY_LENGTH),
+  });
+}
+
 /** Download a file sent to the bot. Bot API caps downloads at ~20MB. */
 export async function downloadTelegramFile(
   config: TelegramConfig,

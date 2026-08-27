@@ -9,6 +9,8 @@ import {
   type Ingestor,
 } from "./ingest.ts";
 import { createClaudeColumnMapper } from "./estimates.ts";
+import { registerNotifier } from "./notify.ts";
+import { createClaudeDeltaGenerator } from "./reconcile.ts";
 import { createWebhookRouter } from "./routes/webhook.ts";
 import { createBlobStore } from "./storage.ts";
 import { createMemoryStore, createPgStore, type Store } from "./store.ts";
@@ -37,6 +39,7 @@ setAgentDeps({
   store,
   blobs,
   mapper: anthropic ? createClaudeColumnMapper(anthropic) : null,
+  generate: anthropic ? createClaudeDeltaGenerator(anthropic) : null,
 });
 
 let ingestor: Ingestor | null = null;
@@ -74,7 +77,26 @@ if (config.whatsapp) {
   app.use(createWebhookRouter(config.whatsapp, store, ingestor));
 }
 
+if (config.whatsapp) {
+  const whatsapp = config.whatsapp;
+  registerNotifier(
+    (id) => !id.includes(":"),
+    async (contactId, text) => {
+      const { sendText } = await import("./whatsapp.ts");
+      await sendText(whatsapp, contactId, text);
+    },
+  );
+}
+
 if (config.telegram) {
+  const telegram = config.telegram;
+  registerNotifier(
+    (id) => id.startsWith("tg:"),
+    async (contactId, text) => {
+      const { sendTelegramText } = await import("./telegram.ts");
+      await sendTelegramText(telegram, Number(contactId.slice(3)), text);
+    },
+  );
   pollTelegram(config.telegram, store, ingestor).catch((error: unknown) => {
     console.error("[telegram] polling loop died:", error);
     process.exitCode = 1;

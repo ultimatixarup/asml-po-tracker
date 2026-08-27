@@ -83,6 +83,50 @@ export interface CreateEstimateInput {
   lines: Omit<EstimateLine, "id">[];
 }
 
+export type CoStatus = "pco" | "cor" | "approved" | "void";
+
+export interface ChangeOrder {
+  id: string;
+  projectId: string;
+  number: number;
+  status: CoStatus;
+  title: string;
+  baseEstimateId: string;
+  netAmount: number;
+}
+
+export interface CoLine {
+  id: string;
+  kind: "add" | "credit";
+  csiCode: string | null;
+  description: string;
+  qty: number | null;
+  unit: string | null;
+  unitCost: number | null;
+  total: number;
+  affectsEstimateLineId: string | null;
+  rationale: string | null;
+  mathNote: string | null;
+  evidenceEventIds: (number | string)[];
+}
+
+export interface CreateChangeOrderInput {
+  projectId: string;
+  title: string;
+  baseEstimateId: string;
+  sourceEventId?: number | string | null;
+  netAmount: number;
+  lines: Omit<CoLine, "id">[];
+}
+
+/** The only legal transitions; everything else is rejected. */
+export const CO_TRANSITIONS: Record<CoStatus, CoStatus[]> = {
+  pco: ["cor", "void"],
+  cor: ["approved", "void"],
+  approved: [],
+  void: [],
+};
+
 export interface AppendEventInput {
   projectId?: string | null;
   type: EventType;
@@ -132,6 +176,15 @@ export interface Store {
   getCurrentEstimate(projectId: string): Promise<Estimate | null>;
   getEstimateLines(estimateId: string): Promise<EstimateLine[]>;
 
+  createChangeOrder(input: CreateChangeOrderInput): Promise<ChangeOrder>;
+  listChangeOrders(projectId: string): Promise<ChangeOrder[]>;
+  getChangeOrder(
+    projectId: string,
+    number: number,
+  ): Promise<{ co: ChangeOrder; lines: CoLine[] } | null>;
+  /** Validates the transition; the caller writes the co.status_changed event. */
+  updateChangeOrderStatus(id: string, to: CoStatus): Promise<ChangeOrder>;
+
   listEvents(
     projectId: string | null,
     opts?: { type?: EventType; limit?: number },
@@ -161,6 +214,9 @@ export function createMemoryStore(): Store {
   const seenMessages = new Set<string>();
   const artifacts = new Map<string, Artifact>();
   const events: EventRecord[] = [];
+  const changeOrders: ChangeOrder[] = [];
+  const coLines = new Map<string, CoLine[]>();
+  let nextCoLineId = 1;
   const estimates: Estimate[] = [];
   const estimateLines = new Map<string, EstimateLine[]>();
   let nextEventId = 1;
@@ -229,6 +285,45 @@ export function createMemoryStore(): Store {
         createdAt: new Date().toISOString(),
       });
       return { id, hash };
+    },
+
+    async createChangeOrder(input) {
+      const number =
+        changeOrders.filter((c) => c.projectId === input.projectId).length + 1;
+      const co: ChangeOrder = {
+        id: `co-${changeOrders.length + 1}`,
+        projectId: input.projectId,
+        number,
+        status: "pco",
+        title: input.title,
+        baseEstimateId: input.baseEstimateId,
+        netAmount: input.netAmount,
+      };
+      changeOrders.push(co);
+      coLines.set(
+        co.id,
+        input.lines.map((line) => ({ ...line, id: `col-${nextCoLineId++}` })),
+      );
+      return co;
+    },
+    async listChangeOrders(projectId) {
+      return changeOrders.filter((c) => c.projectId === projectId);
+    },
+    async getChangeOrder(projectId, number) {
+      const co = changeOrders.find(
+        (c) => c.projectId === projectId && c.number === number,
+      );
+      if (!co) return null;
+      return { co, lines: [...(coLines.get(co.id) ?? [])] };
+    },
+    async updateChangeOrderStatus(id, to) {
+      const co = changeOrders.find((c) => c.id === id);
+      if (!co) throw new Error(`No change order ${id}`);
+      if (!CO_TRANSITIONS[co.status].includes(to)) {
+        throw new Error(`Illegal transition ${co.status} -> ${to}`);
+      }
+      co.status = to;
+      return co;
     },
 
     async listEvents(projectId, opts = {}) {
@@ -309,6 +404,24 @@ export function createMemoryStore(): Store {
 // ---------------------------------------------------------------------------
 
 export function createPgStore(db: Db): Store {
+  const coFromRow = (row: {
+    id: string;
+    project_id: string;
+    number: number;
+    status: CoStatus;
+    title: string;
+    base_estimate_id: string;
+    net_amount: string | number;
+  }): ChangeOrder => ({
+    id: row.id,
+    projectId: row.project_id,
+    number: row.number,
+    status: row.status,
+    title: row.title,
+    baseEstimateId: row.base_estimate_id,
+    netAmount: Number(row.net_amount),
+  });
+
   return {
     async loadHistory(contactId, limit) {
       const result = await db.query(
@@ -505,6 +618,140 @@ export function createPgStore(db: Db): Store {
         unitCost: row.unit_cost === null ? null : Number(row.unit_cost),
         total: Number(row.total),
       }));
+    },
+
+    async createChangeOrder(input) {
+      const client = await db.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          `co:${input.projectId}`,
+        ]);
+        const prior = await client.query(
+          `SELECT COALESCE(MAX(number), 0) AS max FROM change_orders WHERE project_id = $1`,
+          [input.projectId],
+        );
+        const number = Number(prior.rows[0].max) + 1;
+        const inserted = await client.query(
+          `INSERT INTO change_orders
+             (project_id, number, status, title, base_estimate_id, source_event_id, net_amount)
+           VALUES ($1, $2, 'pco', $3, $4, $5, $6) RETURNING id`,
+          [
+            input.projectId,
+            number,
+            input.title,
+            input.baseEstimateId,
+            input.sourceEventId ?? null,
+            input.netAmount,
+          ],
+        );
+        const coId = inserted.rows[0].id;
+        for (const line of input.lines) {
+          const lineRow = await client.query(
+            `INSERT INTO co_lines
+               (change_order_id, kind, csi_code, description, qty, unit,
+                unit_cost, total, affects_estimate_line_id, rationale, math_note)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+            [
+              coId,
+              line.kind,
+              line.csiCode,
+              line.description,
+              line.qty,
+              line.unit,
+              line.unitCost,
+              line.total,
+              line.affectsEstimateLineId,
+              line.rationale,
+              line.mathNote,
+            ],
+          );
+          for (const eventId of line.evidenceEventIds) {
+            await client.query(
+              `INSERT INTO co_line_evidence (co_line_id, event_id) VALUES ($1, $2)`,
+              [lineRow.rows[0].id, eventId],
+            );
+          }
+        }
+        await client.query("COMMIT");
+        return {
+          id: coId,
+          projectId: input.projectId,
+          number,
+          status: "pco" as const,
+          title: input.title,
+          baseEstimateId: input.baseEstimateId,
+          netAmount: input.netAmount,
+        };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+    async listChangeOrders(projectId) {
+      const result = await db.query(
+        `SELECT id, project_id, number, status, title, base_estimate_id, net_amount
+         FROM change_orders WHERE project_id = $1 ORDER BY number`,
+        [projectId],
+      );
+      return result.rows.map(coFromRow);
+    },
+    async getChangeOrder(projectId, number) {
+      const found = await db.query(
+        `SELECT id, project_id, number, status, title, base_estimate_id, net_amount
+         FROM change_orders WHERE project_id = $1 AND number = $2`,
+        [projectId, number],
+      );
+      const row = found.rows[0];
+      if (!row) return null;
+      const lines = await db.query(
+        `SELECT l.id, l.kind, l.csi_code, l.description, l.qty, l.unit,
+                l.unit_cost, l.total, l.affects_estimate_line_id, l.rationale,
+                l.math_note,
+                COALESCE(json_agg(e.event_id) FILTER (WHERE e.event_id IS NOT NULL), '[]') AS evidence
+         FROM co_lines l
+         LEFT JOIN co_line_evidence e ON e.co_line_id = l.id
+         WHERE l.change_order_id = $1
+         GROUP BY l.id ORDER BY l.id`,
+        [row.id],
+      );
+      return {
+        co: coFromRow(row),
+        lines: lines.rows.map((l) => ({
+          id: l.id,
+          kind: l.kind,
+          csiCode: l.csi_code,
+          description: l.description,
+          qty: l.qty === null ? null : Number(l.qty),
+          unit: l.unit,
+          unitCost: l.unit_cost === null ? null : Number(l.unit_cost),
+          total: Number(l.total),
+          affectsEstimateLineId: l.affects_estimate_line_id,
+          rationale: l.rationale,
+          mathNote: l.math_note,
+          evidenceEventIds: l.evidence.map(Number),
+        })),
+      };
+    },
+    async updateChangeOrderStatus(id, to) {
+      const found = await db.query(
+        `SELECT id, project_id, number, status, title, base_estimate_id, net_amount
+         FROM change_orders WHERE id = $1`,
+        [id],
+      );
+      const row = found.rows[0];
+      if (!row) throw new Error(`No change order ${id}`);
+      const from = row.status as CoStatus;
+      if (!CO_TRANSITIONS[from].includes(to)) {
+        throw new Error(`Illegal transition ${from} -> ${to}`);
+      }
+      await db.query(`UPDATE change_orders SET status = $2 WHERE id = $1`, [
+        id,
+        to,
+      ]);
+      return { ...coFromRow(row), status: to };
     },
 
     async listEvents(projectId, opts = {}) {

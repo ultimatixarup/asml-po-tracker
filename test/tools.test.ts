@@ -16,7 +16,14 @@ const run = async (t: Tool, input: unknown): Promise<string> =>
   String(await (t as { run: (i: unknown) => Promise<unknown> }).run(input));
 
 function makeDeps(overrides: Partial<ToolDeps> = {}): ToolDeps {
-  return { store: createMemoryStore(), blobs: null, mapper: null, ...overrides };
+  return {
+    store: createMemoryStore(),
+    blobs: null,
+    mapper: null,
+    generate: null,
+    notify: async () => true,
+    ...overrides,
+  };
 }
 
 test("project lifecycle: create activates, switch by code, list shows active", async () => {
