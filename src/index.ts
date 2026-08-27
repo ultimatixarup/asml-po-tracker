@@ -4,6 +4,19 @@ import { createWebhookRouter } from "./routes/webhook.ts";
 import { pollTelegram } from "./telegram.ts";
 
 const config = loadConfig();
+
+if (config.db) {
+  const { createPool, runMigrations } = await import("./db.ts");
+  const applied = await runMigrations(createPool(config.db));
+  console.log(
+    applied.length
+      ? `[db] applied migrations: ${applied.join(", ")}`
+      : "[db] schema up to date",
+  );
+} else {
+  console.warn("[db] DATABASE_URL not set -- running with in-memory state");
+}
+
 const app = express();
 
 // Keep the raw bytes around: the webhook signature is computed over them, and

@@ -38,3 +38,31 @@ test("partial whatsapp config names the missing variables", () => {
     /missing WHATSAPP_APP_SECRET, WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_ACCESS_TOKEN/,
   );
 });
+
+test("db and storage groups activate independently of channels", () => {
+  const config = loadConfig({
+    TELEGRAM_BOT_TOKEN: "123:abc",
+    DATABASE_URL: "postgres://localhost/cm",
+    BUCKET_NAME: "blobs",
+    AWS_REGION: "auto",
+    AWS_ACCESS_KEY_ID: "k",
+    AWS_SECRET_ACCESS_KEY: "s",
+    AWS_ENDPOINT_URL_S3: "https://fly.storage.tigris.dev",
+    AUDIT_TOKEN: "tok",
+  });
+  assert.deepEqual(config.db, { url: "postgres://localhost/cm" });
+  assert.equal(config.storage?.bucket, "blobs");
+  assert.equal(config.storage?.endpoint, "https://fly.storage.tigris.dev");
+  assert.equal(config.auditToken, "tok");
+
+  const bare = loadConfig({ TELEGRAM_BOT_TOKEN: "123:abc" });
+  assert.equal(bare.db, undefined);
+  assert.equal(bare.storage, undefined);
+});
+
+test("partial storage config names the missing variables", () => {
+  assert.throws(
+    () => loadConfig({ TELEGRAM_BOT_TOKEN: "x", BUCKET_NAME: "blobs" }),
+    /missing AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY/,
+  );
+});
