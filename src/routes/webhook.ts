@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { WhatsAppConfig } from "../config.ts";
 import { forgetConversation, preview, respond } from "../agent.ts";
+import { handleMenu } from "../menu.ts";
 import type { Ingestor } from "../ingest.ts";
 import type { Store } from "../store.ts";
 import {
@@ -110,7 +111,10 @@ async function handleMessage(
   }
 
   console.log(`[trace] ${message.from} -> "${preview(message.text)}"`);
-  const reply = await respond(message.from, message.text);
+  const menu = handleMenu(message.from, message.text);
+  const reply = menu?.reply
+    ? menu.reply
+    : await respond(message.from, menu?.forward ?? message.text);
   await sendText(config, message.from, reply);
   console.log(`[trace] ${message.from} <- "${preview(reply)}"`);
 }

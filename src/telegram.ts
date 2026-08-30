@@ -1,5 +1,6 @@
 import type { TelegramConfig } from "./config.ts";
 import { forgetConversation, preview, respond } from "./agent.ts";
+import { handleMenu, rootMenu } from "./menu.ts";
 import type { Ingestor } from "./ingest.ts";
 import type { Store } from "./store.ts";
 
@@ -176,12 +177,17 @@ async function handleMessage(
     }
   } else if (text === "/start") {
     reply =
-      "Hello, world! \u{1F44B} I'm a demo Claude agent. Say anything -- or send `reset` to wipe my memory of this chat.";
+      "Hello! \u{1F477} I'm your construction manager agent.\n\n" + rootMenu();
   } else if (text.toLowerCase() === "reset") {
     await forgetConversation(contactId);
     reply = "Forgotten. We're starting fresh.";
   } else {
-    reply = await respond(contactId, message.text);
+    const menu = handleMenu(contactId, text);
+    if (menu?.reply) {
+      reply = menu.reply;
+    } else {
+      reply = await respond(contactId, menu?.forward ?? message.text);
+    }
   }
 
   await api(config, "sendMessage", {
@@ -200,6 +206,17 @@ export async function pollTelegram(
 ): Promise<void> {
   const me = (await api(config, "getMe", {})) as { username?: string };
   console.log(`[telegram] polling as @${me.username ?? "unknown"}`);
+
+  // Native command menu (the "/" button in Telegram). Best-effort, idempotent.
+  await api(config, "setMyCommands", {
+    commands: [
+      { command: "menu", description: "Open the menu" },
+      { command: "help", description: "What can I send you?" },
+      { command: "start", description: "Introduction + menu" },
+    ],
+  }).catch((error: unknown) => {
+    console.warn("[telegram] setMyCommands failed:", error);
+  });
 
   let offset = 0;
   while (!signal?.aborted) {
